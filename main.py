@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from ultralytics import YOLO
 import os
 
+from NacosConfig import register_service, deregister_service
 from Config import get_config
 
 # ========== 加载配置 ==========
@@ -263,6 +264,14 @@ async def lifespan(app: FastAPI):
     infer_thread = threading.Thread(target=inference_worker, daemon=True)
     infer_thread.start()
     logger.info("全局推理线程已启动")
+
+    # Nacos 注册
+    try:
+        await register_service()
+        logger.info("Nacos 注册成功")
+    except Exception as e:
+        logger.error(f"Nacos 注册失败: {e}")
+
     yield
 
     # 关闭时清理
@@ -270,6 +279,11 @@ async def lifespan(app: FastAPI):
     with stream_lock:
         for sp in list(stream_processors.values()):
             sp.stop()
+    try:
+        await deregister_service()
+        logger.info("Nacos 注销成功")
+    except Exception as e:
+        logger.error(f"Nacos 注销失败: {e}")
 
 
 app = FastAPI(title="YOLO 检测与流服务", version="2.0", lifespan=lifespan)

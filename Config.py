@@ -27,6 +27,18 @@ class Config:
         return int(self._config.get("service", {}).get("port", 8000))
 
     @property
+    def nacos_server_addr(self) -> str:
+        return self._config.get("nacos", {}).get("server_addr", "0.0.0.0:8848")
+
+    @property
+    def nacos_group(self) -> str:
+        return self._config.get("nacos", {}).get("group", "DEFAULT_GROUP")
+
+    @property
+    def nacos_service_name(self) -> str:
+        return self._config.get("nacos", {}).get("service_name", "py-service")
+
+    @property
     def mediamtx_webrtc_base(self) -> str:
         return self._config.get("mediamtx", {}).get("webrtc_base", "http://127.0.0.1:8889")
 
