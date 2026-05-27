@@ -1,0 +1,17 @@
+# 服务配置
+service:
+  host: "0.0.0.0"
+  port: 8000
+
+# MediaMTX WebRTC 基础地址
+mediamtx:
+  webrtc_base: "http://192.168.233.128:8889"
+
+# YOLO 推理
+yolo:
+  default_model: "../yolo11n.pt"    # 默认模型路径
+  target_fps: 15                     # 推流目标帧率
+  stream_connect_timeout: 5          # 拉流超时（秒）
+
+# 图片检测结果保存目录
+temp_img: "./model_results"
