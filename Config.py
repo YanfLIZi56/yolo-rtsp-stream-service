@@ -28,7 +28,7 @@ class Config:
 
     @property
     def nacos_server_addr(self) -> str:
-        return self._config.get("nacos", {}).get("server_addr", "0.0.0.0:8848")
+        return self._config.get("nacos", {}).get("server_addr", "127.0.0.1:8848")
 
     @property
     def nacos_group(self) -> str:
