@@ -1,3 +1,4 @@
+import json
 import time
 import threading
 import queue
@@ -11,6 +12,7 @@ from datetime import datetime
 import av
 import numpy as np
 import cv2
+import pika
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from pydantic import BaseModel, Field
 from ultralytics import YOLO
@@ -18,6 +20,7 @@ import os
 
 from NacosConfig import register_service, deregister_service
 from Config import get_config
+from Service.RabbitmqConfig import rabbitmq_pool
 
 # ========== 加载配置 ==========
 config = get_config()
@@ -25,6 +28,8 @@ config = get_config()
 # ========== 日志配置 ==========
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("yolo-service")
+logging.getLogger("pika").setLevel(logging.WARNING)
+logging.getLogger("av").setLevel(logging.WARNING)
 
 # ========== 全局配置 ==========
 TARGET_FPS = config.target_fps
@@ -77,6 +82,17 @@ def inference_worker():
             selected_model = get_model(model_path)
             results = selected_model(img, verbose=False)
             annotated = results[0].plot()  # BGR 图像
+            class_counts = {}
+            for box in results[0].boxes:
+                cls_id = int(box.cls)
+                class_name = selected_model.names[cls_id]
+                class_counts[class_name] = class_counts.get(class_name, 0) + 1
+
+            with stream_lock:
+                sp = stream_processors.get(stream_id)
+            if sp:
+                sp.accumulate_detections(class_counts)
+
             with results_lock:
                 results_dict[stream_id] = annotated
         except Exception as e:
@@ -87,8 +103,9 @@ def inference_worker():
 
 # ========== 单路流处理器 ==========
 class StreamProcessor:
-    def __init__(self, stream_id: str, source_url: str, duration: int, model_path: Optional[str] = None):
+    def __init__(self, stream_id: str, source_url: str, duration: int, model_path: Optional[str] = None, device_id: Optional[int] = None):
         self.stream_id = stream_id
+        self.device_id = device_id
         self.source_url = source_url
         self.duration = duration
         self.model_path = model_path  # 该流使用的模型路径
@@ -97,10 +114,17 @@ class StreamProcessor:
         self.frame_lock = threading.Lock()
         self.running = True
         self.started_successfully = False
+        self.frame_skip = max(1, config.frame_skip)  # 至少为1
+        self.frame_count = 0
 
         self.capture_thread = None
         self.push_thread = None
         self.timer = None
+
+        self.class_counts_acc: Dict[str, int] = {}
+        self.acc_lock = threading.Lock()
+        self.stats_interval = config.rabbitmq_stats_interval
+        self.stats_thread = None
 
     @staticmethod
     def _build_target_url(source_url: str) -> str:
@@ -111,6 +135,12 @@ class StreamProcessor:
     def _parse_webrtc_path(rtsp_url: str) -> Optional[str]:
         m = re.match(r'rtsp://[^/]+(/.*)', rtsp_url)
         return m.group(1) if m else None
+
+    def accumulate_detections(self, class_counts: dict):
+        """合并本帧的类别统计到累加器"""
+        with self.acc_lock:
+            for k, v in class_counts.items():
+                self.class_counts_acc[k] = self.class_counts_acc.get(k, 0) + v
 
     def get_webrtc_url(self) -> str:
         path = self._parse_webrtc_path(self.target_url)
@@ -135,11 +165,15 @@ class StreamProcessor:
                         img = frame.to_ndarray(format='bgr24')
                         with self.frame_lock:
                             self.latest_frame = img
-                        # 放入推理队列（携带模型路径）
-                        try:
-                            inference_queue.put_nowait((self.stream_id, self.model_path, img))
-                        except queue.Full:
-                            pass
+
+                        # === 抽帧逻辑 ===
+                        self.frame_count += 1
+                        if self.frame_count % self.frame_skip == 0:
+                            # 放入推理队列（携带模型路径）
+                            try:
+                                inference_queue.put_nowait((self.stream_id, self.model_path, img))
+                            except queue.Full:
+                                pass
                         if not self.running or not global_running:
                             break
                 if not self.running or not global_running:
@@ -169,21 +203,34 @@ class StreamProcessor:
             }
             frame_interval = 1.0 / TARGET_FPS
             last_push_time = 0
+            last_annotated = None  # 保存最后一次推理结果
 
             while self.running and global_running:
+                # 尝试获取新推理结果
                 with results_lock:
-                    annotated = results_dict.pop(self.stream_id, None)
-                if annotated is None:
+                    new_annotated = results_dict.pop(self.stream_id, None)
+                if new_annotated is not None:
+                    last_annotated = new_annotated
+
+                # 选择帧：优先推理结果 → 旧结果 → 原始帧
+                if last_annotated is not None:
+                    frame_to_push = last_annotated
+                else:
+                    with self.frame_lock:
+                        frame_to_push = self.latest_frame
+
+                if frame_to_push is None or not isinstance(frame_to_push, np.ndarray):
                     time.sleep(0.005)
                     continue
 
                 now = time.time()
                 if now - last_push_time >= frame_interval:
-                    new_frame = av.VideoFrame.from_ndarray(annotated, format='bgr24')
+                    new_frame = av.VideoFrame.from_ndarray(frame_to_push, format='bgr24')
                     new_frame.pts = None
                     for packet in output_stream.encode(new_frame):
                         output_container.mux(packet)
                     last_push_time = now
+                time.sleep(0.001)
 
             # 清理
             if output_stream:
@@ -220,6 +267,9 @@ class StreamProcessor:
             self.timer.daemon = True
             self.timer.start()
 
+        # 启动统计发送线程
+        self.stats_thread = threading.Thread(target=self._send_stats_loop, daemon=True)
+        self.stats_thread.start()
         logger.info(f"[{self.stream_id}] 流已启动，推流: {self.target_url}")
         return True
 
@@ -245,6 +295,53 @@ class StreamProcessor:
             results_dict.pop(self.stream_id, None)
 
         logger.info(f"[{self.stream_id}] 已停止")
+
+    def _send_stats_loop(self):
+        """每 stats_interval 秒发送一次累积统计到 RabbitMQ，发送后重置累加器"""
+        try:
+            connection, channel = rabbitmq_pool.get_channel()
+            logger.info(f"[{self.stream_id}] 统计发送线程已启动")
+        except Exception as e:
+            logger.error(f"[{self.stream_id}] 无法连接 RabbitMQ: {e}")
+            return
+
+        while self.running and global_running:
+            time.sleep(self.stats_interval)
+
+            # 1. 获取当前累加器快照并立即重置（无论后续发送成功与否）
+            with self.acc_lock:
+                snapshot = self.class_counts_acc.copy()
+                self.class_counts_acc.clear()
+            total_count = sum(snapshot.values())
+
+            # 2. 构造消息（格式：{devId, count, classCounts}）
+            message = {
+                "devId": self.device_id or self.stream_id,  # 若无设备ID则用流ID兜底
+                "count": total_count,
+                "classCounts": snapshot
+            }
+
+            # 3. 发送消息（非阻塞，失败不重试）
+            try:
+                channel.basic_publish(
+                    exchange=config.rabbitmq_exchange,
+                    routing_key=config.rabbitmq_routing_key,
+                    body=json.dumps(message),
+                    properties=pika.BasicProperties(delivery_mode=1)
+                )
+                logger.info(f"[{self.stream_id}] 统计已发送: {message}")
+            except Exception as e:
+                logger.warning(f"[{self.stream_id}] 发送统计失败: {e}")
+                # 尝试重连，保证下次可能恢复
+                try:
+                    connection, channel = rabbitmq_pool.get_channel()
+                except:
+                    pass
+            # 4. 无论成功与否，累加器已清空，继续下一周期
+        try:
+            connection.close()
+        except:
+            pass
 
 
 # ========== FastAPI 应用生命周期 ==========
@@ -355,6 +452,7 @@ class StreamRequest(BaseModel):
     rtsp_url: str = Field(..., description="源 RTSP 流地址")
     duration: int = Field(0, ge=0, description="持续时间（秒），0 表示无限")
     model_path: Optional[str] = Field(None, description="模型文件路径，不传则使用默认模型")
+    device_id: Optional[int] = None
 
 
 class StreamResponse(BaseModel):
@@ -370,6 +468,7 @@ def create_stream(req: StreamRequest):
     source = req.rtsp_url.strip()
     duration = req.duration
     model_path = req.model_path
+    dev_id = req.device_id
 
     # 检查是否已存在相同的源+模型
     with stream_lock:
@@ -384,7 +483,7 @@ def create_stream(req: StreamRequest):
                 )
 
     stream_id = str(uuid.uuid4())[:8]
-    processor = StreamProcessor(stream_id, source, duration, model_path)
+    processor = StreamProcessor(stream_id, source, duration, model_path, dev_id)
 
     if not processor.start():
         return StreamResponse(status="error", message="Failed to connect to source stream or timeout")

@@ -55,6 +55,42 @@ class Config:
         return int(self._config.get("yolo", {}).get("stream_connect_timeout", 5))
 
     @property
+    def frame_skip(self) -> int:
+        return int(self._config.get("yolo", {}).get("frame_skip", 1))
+
+    @property
+    def rabbitmq_host(self) -> str:
+        return self._config.get("rabbitmq", {}).get("host", "127.0.0.1")
+
+    @property
+    def rabbitmq_port(self) -> int:
+        return int(self._config.get("rabbitmq", {}).get("port", 5672))
+
+    @property
+    def rabbitmq_virtual_host(self) -> str:
+        return self._config.get("rabbitmq", {}).get("virtual_host", "/")
+
+    @property
+    def rabbitmq_user(self) -> str:
+        return self._config.get("rabbitmq", {}).get("username", "guest")
+
+    @property
+    def rabbitmq_pass(self) -> str:
+        return self._config.get("rabbitmq", {}).get("password", "guest")
+
+    @property
+    def rabbitmq_exchange(self) -> str:
+        return self._config.get("rabbitmq", {}).get("exchange", "yolo.direct.exchange")
+
+    @property
+    def rabbitmq_routing_key(self) -> str:
+        return self._config.get("rabbitmq", {}).get("routing_key", "yolo.statistics")
+
+    @property
+    def rabbitmq_stats_interval(self) -> int:
+        return int(self._config.get("rabbitmq", {}).get("stats_interval", 30))
+
+    @property
     def temp_img_dir(self) -> str:
         return self._config.get("temp_img", "./model_results")
 

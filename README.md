@@ -18,7 +18,8 @@
 ├── main.py           # FastAPI 主程序
 ├── Config.py         # 配置管理（读取 config.yml）
 ├── application.yml   # 应用配置文件
-├── nacosConfig.py    # Nacos 服务注册（可选）
+├── NacosConfig.py    # Nacos 服务注册（可选）
+├── RabbitmqConfig.py    # RabbitMQ 配置
 ├── requirements.txt  # Python 依赖
 └── README.md         # 本文件
 ```
@@ -27,7 +28,10 @@
 - Python 3.10+
 - FFmpeg（系统需安装，用于视频编解码）
 - MediaMTX 服务（用于 RTSP 流转 WebRTC）
-- Redis（可选，集群模式备用）
+- Nacos
+- RabbitMQ
+
+( 如果不想要Nacos和RabbitMQ，可以看看首次提交的代码 )
 
 ## 快速开始
 
@@ -111,11 +115,12 @@ curl -X POST "http://localhost:8000/detect" \
 }
 ```
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| rtsp_url | string | 是 | 源 RTSP 流地址 |
-| duration | int | 否 | 运行秒数，0 表示无限 (直到手动停止) |
-| model_path | string/null | 否 | 模型文件路径，null 则使用默认模型 |
+| 字段 | 类型          | 必填 | 说明                   |
+|------|-------------|----|----------------------|
+| rtsp_url | string      | 是  | 源 RTSP 流地址           |
+| duration | int         | 否  | 运行秒数，0 表示无限 (直到手动停止) |
+| model_path | string/null | 否  | 模型文件路径，null 则使用默认模型  |
+|  device_id          | int/null    | 是  | 设备id, 可选             |
 
 **成功响应**：
 
@@ -151,12 +156,20 @@ curl -X POST "http://localhost:8000/detect" \
 | service.host                | 服务监听地址                 | 0.0.0.0               |
 | service.port                | 服务监听端口                 | 8000                  |
 | nacos.server_addr           | nacos服务地址              | http://127.0.0.1:8848 |
-| nacos.group                 | nacos注册中心的组            | DEFAULT_GROUP                      |
-| nacos.service_name          | 注册的服务名                 | py-service                      |
+| nacos.group                 | nacos注册中心的组            | DEFAULT_GROUP         |
+| nacos.service_name          | 注册的服务名                 | py-service            |
 | mediamtx.webrtc_base        | MediaMTX WebRTC 基础 URL | http://127.0.0.1:8889 |
 | yolo.default_model          | 默认 YOLO 模型路径           | ../yolo11n.pt         |
 | yolo.target_fps             | 推流帧率                   | 15                    |
 | yolo.stream_connect_timeout | 拉流超时(秒)                | 5                     |
+| rabbitmq.host               | RabbitMQ 服务器地址         | 127.0.0.1             |
+| rabbitmq.port               | RabbitMQ 端口              | 5672                  |
+| rabbitmq.virtual_host       | RabbitMQ 虚拟主机          | /                     |
+| rabbitmq.username           | RabbitMQ 用户名            | guest                 |
+| rabbitmq.password           | RabbitMQ 密码              | guest                 |
+| rabbitmq.exchange           | RabbitMQ 交换机名称         | yolo.direct.exchange  |
+| rabbitmq.routing_key        | RabbitMQ 路由键            | yolo.statistics       |
+| rabbitmq.stats_interval     | 统计发送间隔（秒）            | 30                    |
 | temp_img                    | 图片检测结果保存目录             | ./model_results       |
 
 ## 注意事项

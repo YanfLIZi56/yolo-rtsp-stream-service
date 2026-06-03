@@ -17,6 +17,17 @@ yolo:
   default_model: "../yolo11n.pt"    # 默认模型路径
   target_fps: 15                     # 推流目标帧率
   stream_connect_timeout: 5          # 拉流超时（秒）
+  frame_skip: 3   # 1表示逐帧检测
+
+rabbitmq:
+  host: "192.168.233.128"
+  port: 5672
+  virtual_host: "/"
+  username: "test"
+  password: "test"
+  exchange: "yolo.direct.exchange"   # 交换机名称
+  routing_key: "yolo.statistics"     # 路由键
+  stats_interval: 30                 # 统计发送间隔（秒）
 
 # 图片检测结果保存目录
 temp_img: "./model_results"

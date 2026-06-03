@@ -8,3 +8,4 @@ pydantic>=2.0.0
 pyyaml>=6.0
 # 如需 Nacos 服务注册，请安装 nacos-sdk-python
 # nacos-sdk-python==3.2.0
+pika>=1.4.1
