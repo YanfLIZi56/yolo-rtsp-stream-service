@@ -27,6 +27,10 @@ class Config:
         return int(self._config.get("service", {}).get("port", 8000))
 
     @property
+    def nacos_enabled(self) -> bool:
+        return self._config.get("nacos", {}).get("enabled", False)
+
+    @property
     def nacos_server_addr(self) -> str:
         return self._config.get("nacos", {}).get("server_addr", "127.0.0.1:8848")
 
@@ -93,6 +97,10 @@ class Config:
     @property
     def temp_img_dir(self) -> str:
         return self._config.get("temp_img", "./model_results")
+
+    @property
+    def origin_img_dir(self) -> str:
+        return self._config.get("origin_img", "./origin_img")
 
 
 # 全局单例获取函数

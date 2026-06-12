@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from ultralytics import YOLO
 import os
 
-from NacosConfig import register_service, deregister_service
+from NacosConfig import get_nacos_manager
 from Config import get_config
 from Service.RabbitmqConfig import rabbitmq_pool
 
@@ -37,6 +37,7 @@ DEFAULT_MODEL_PATH = config.default_model_path  # 默认模型路径
 STREAM_CONNECT_TIMEOUT = config.stream_connect_timeout  # 拉流超时（秒）
 MEDIAMTX_WEBRTC_BASE = config.mediamtx_webrtc_base  # 请改为实际 MediaMTX 地址
 TEMP_IMG = config.temp_img_dir
+ORIGIN_IMG = config.origin_img_dir
 
 # ========== 模型池管理 ==========
 default_model: Optional[YOLO] = None
@@ -103,7 +104,8 @@ def inference_worker():
 
 # ========== 单路流处理器 ==========
 class StreamProcessor:
-    def __init__(self, stream_id: str, source_url: str, duration: int, model_path: Optional[str] = None, device_id: Optional[int] = None):
+    def __init__(self, stream_id: str, source_url: str, duration: int, model_path: Optional[str] = None,
+                 device_id: Optional[int] = None):
         self.stream_id = stream_id
         self.device_id = device_id
         self.source_url = source_url
@@ -363,11 +365,8 @@ async def lifespan(app: FastAPI):
     logger.info("全局推理线程已启动")
 
     # Nacos 注册
-    try:
-        await register_service()
-        logger.info("Nacos 注册成功")
-    except Exception as e:
-        logger.error(f"Nacos 注册失败: {e}")
+    nacos_manager = get_nacos_manager()
+    await nacos_manager.register_service()
 
     yield
 
@@ -376,12 +375,7 @@ async def lifespan(app: FastAPI):
     with stream_lock:
         for sp in list(stream_processors.values()):
             sp.stop()
-    try:
-        await deregister_service()
-        logger.info("Nacos 注销成功")
-    except Exception as e:
-        logger.error(f"Nacos 注销失败: {e}")
-
+    await nacos_manager.deregister_service()
 
 app = FastAPI(title="YOLO 检测与流服务", version="2.0", lifespan=lifespan)
 
@@ -427,20 +421,26 @@ async def detect(
     try:
         now = datetime.now()
         date_path = f"{now.year}/{now.month:02d}/{now.day:02d}"
-        full_dir = os.path.join(TEMP_IMG, date_path)
-        os.makedirs(full_dir, exist_ok=True)
+        result_full_dir = os.path.join(TEMP_IMG, date_path)
+        os.makedirs(result_full_dir, exist_ok=True)
+        origin_full_dir = os.path.join(ORIGIN_IMG, date_path)
+        os.makedirs(origin_full_dir, exist_ok=True)
         file_name = f'{uuid.uuid4()}.jpg'
         out_path = f'{date_path}/{file_name}'
-        results[0].save(filename=os.path.join(full_dir, file_name))
+        origin_out_path = f'{date_path}/{file_name}'
+        results[0].save(filename=os.path.join(result_full_dir, file_name))
+        cv2.imwrite(os.path.join(origin_full_dir, file_name), img)
     except Exception as e:
         logger.warning(f"保存结果图失败: {e}")
         out_path = 'no-data.jpg'
+        origin_out_path = 'no-data.jpg'
 
     return {
         "code": 0,
         "msg": "success",
         "filename": file.filename,
         "result": out_path,
+        "origin": origin_out_path,
         "count": len(detections),
         "detections": detections,
         "time": detect_time

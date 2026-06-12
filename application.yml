@@ -4,6 +4,7 @@ service:
   port: 8000
 
 nacos:
+  enabled: False
   server_addr: "http://192.168.233.128:8848"
   group: "DEFAULT_GROUP"
   service_name: "yolo-service"
@@ -23,11 +24,13 @@ rabbitmq:
   host: "192.168.233.128"
   port: 5672
   virtual_host: "/"
-  username: "test"
-  password: "test"
+  username: "YLZ"
+  password: "123"
   exchange: "yolo.direct.exchange"   # 交换机名称
   routing_key: "yolo.statistics"     # 路由键
   stats_interval: 30                 # 统计发送间隔（秒）
 
 # 图片检测结果保存目录
 temp_img: "./model_results"
+# 原始图片保存目录
+origin_img: "./origin_img"
