@@ -5,7 +5,7 @@ import queue
 import uuid
 import re
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -14,7 +14,8 @@ import numpy as np
 import cv2
 import pika
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
+
 from ultralytics import YOLO
 import os
 
@@ -35,7 +36,7 @@ logging.getLogger("av").setLevel(logging.WARNING)
 TARGET_FPS = config.target_fps
 DEFAULT_MODEL_PATH = config.default_model_path  # 默认模型路径
 STREAM_CONNECT_TIMEOUT = config.stream_connect_timeout  # 拉流超时（秒）
-MEDIAMTX_WEBRTC_BASE = config.mediamtx_webrtc_base  # 请改为实际 MediaMTX 地址
+MEDIAMTX_RTSP_HOST = f"rtsp://{config.mediamtx_host}:{config.mediamtx_rtsp_port}"  # 请改为实际 MediaMTX rtsp地址
 TEMP_IMG = config.temp_img_dir
 ORIGIN_IMG = config.origin_img_dir
 
@@ -81,13 +82,7 @@ def inference_worker():
             continue
         try:
             selected_model = get_model(model_path)
-            results = selected_model(img, verbose=False)
-            annotated = results[0].plot()  # BGR 图像
-            class_counts = {}
-            for box in results[0].boxes:
-                cls_id = int(box.cls)
-                class_name = selected_model.names[cls_id]
-                class_counts[class_name] = class_counts.get(class_name, 0) + 1
+            annotated, class_counts = model_handler(img, selected_model)
 
             with stream_lock:
                 sp = stream_processors.get(stream_id)
@@ -100,6 +95,44 @@ def inference_worker():
             logger.error(f"推理错误 stream={stream_id}: {e}")
         finally:
             inference_queue.task_done()
+
+
+def model_handler(img, selected_model) -> (np.ndarray, Dict[str, int]):
+    """
+    模型处理器
+    :param img: 图像
+    :param selected_model: 当前使用的模型
+    :return: annotated: 带识别框的图像
+    :return: class_counts: 检测统计后的结果
+    """
+    # 跨帧检测
+    results = selected_model.track(img,
+                                  conf=0.25,
+                                  stream=True,
+                                  persist=True,
+                                  verbose=False
+                                  )
+    annotated = None
+    class_counts: Dict[str, Set[int]] = {}
+    for r in results:
+        annotated = r.plot()
+        for box in r.boxes:
+            cls_id = int(box.cls)
+            class_name: str = selected_model.names[cls_id]
+            entity_id: int = int(box.id)
+            class_counts.setdefault(class_name, set()).add(entity_id)
+    class_num = {cls: len(id_set) for cls, id_set in class_counts.items()}
+    return annotated, class_num
+
+    # 识图
+    # results = selected_model(img, conf=0.25, verbose=False)
+    # annotated = results[0].plot()  # BGR 图像
+    # class_counts = {}
+    # for box in results[0].boxes:
+    #     cls_id = int(box.cls)
+    #     class_name = selected_model.names[cls_id]
+    #     class_counts[class_name] = class_counts.get(class_name, 0) + 1
+    # return annotated, class_counts
 
 
 # ========== 单路流处理器 ==========
@@ -130,8 +163,15 @@ class StreamProcessor:
 
     @staticmethod
     def _build_target_url(source_url: str) -> str:
-        source = source_url.rstrip('/')
-        return f"{source}/yolo"
+        match = re.match(r'rtsp://[^/]+(/.*)', source_url)
+        if match:
+            stream_path = match.group(1)
+        else:
+            # 如果解析失败，使用默认路径
+            stream_path = "/stream"
+
+        # 构建 MediaMTX 推流地址
+        return f"{MEDIAMTX_RTSP_HOST}{stream_path}/yolo"
 
     @staticmethod
     def _parse_webrtc_path(rtsp_url: str) -> Optional[str]:
@@ -148,7 +188,7 @@ class StreamProcessor:
         path = self._parse_webrtc_path(self.target_url)
         if not path:
             return ""
-        return f"{MEDIAMTX_WEBRTC_BASE}{path}"
+        return path
 
     def capture_loop(self):
         """拉流线程"""
@@ -184,6 +224,7 @@ class StreamProcessor:
         except Exception as e:
             logger.error(f"[{self.stream_id}] 拉流异常: {e}")
             self.started_successfully = False
+            self.send_error_message(f"RTSP流断开或异常: {str(e)}")
         finally:
             logger.info(f"[{self.stream_id}] 拉流线程退出")
             self.running = False
@@ -296,6 +337,7 @@ class StreamProcessor:
         with results_lock:
             results_dict.pop(self.stream_id, None)
 
+        self.send_end_message()
         logger.info(f"[{self.stream_id}] 已停止")
 
     def _send_stats_loop(self):
@@ -319,6 +361,7 @@ class StreamProcessor:
             # 2. 构造消息（格式：{devId, count, classCounts}）
             message = {
                 "devId": self.device_id or self.stream_id,  # 若无设备ID则用流ID兜底
+                "coordinate": {"lng": 0.100000, "lat": 0.100000},
                 "count": total_count,
                 "classCounts": snapshot
             }
@@ -344,6 +387,43 @@ class StreamProcessor:
             connection.close()
         except:
             pass
+
+    def send_error_message(self, remark: str):
+        """发送异常消息到RabbitMQ"""
+        try:
+            connection, channel = rabbitmq_pool.get_channel()
+            message = {
+                "devId": self.device_id or self.stream_id,
+                "message": remark
+            }
+            channel.basic_publish(
+                exchange=config.rabbitmq_exchange,
+                routing_key=config.rabbitmq_error_routing_key,
+                body=json.dumps(message),
+                properties=pika.BasicProperties(delivery_mode=1)
+            )
+            logger.info(f"[{self.stream_id}] 异常消息已发送: {message}")
+            connection.close()
+        except Exception as e:
+            logger.error(f"[{self.stream_id}] 发送异常消息失败: {e}")
+
+    def send_end_message(self):
+        """发送结束消息到RabbitMQ"""
+        try:
+            connection, channel = rabbitmq_pool.get_channel()
+            message = {
+                "devId": self.device_id or self.stream_id,
+            }
+            channel.basic_publish(
+                exchange=config.rabbitmq_exchange,
+                routing_key=config.rabbitmq_end_routing_key,
+                body=json.dumps(message),
+                properties=pika.BasicProperties(delivery_mode=1)
+            )
+            logger.info(f"[{self.stream_id}] 结束消息已发送: {message}")
+            connection.close()
+        except Exception as e:
+            logger.error(f"[{self.stream_id}] 发送结束消息失败: {e}")
 
 
 # ========== FastAPI 应用生命周期 ==========
@@ -376,6 +456,7 @@ async def lifespan(app: FastAPI):
         for sp in list(stream_processors.values()):
             sp.stop()
     await nacos_manager.deregister_service()
+
 
 app = FastAPI(title="YOLO 检测与流服务", version="2.0", lifespan=lifespan)
 
@@ -456,6 +537,12 @@ class StreamRequest(BaseModel):
 
 
 class StreamResponse(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=lambda field_name: ''.join(
+            word.capitalize() if i > 0 else word for i, word in enumerate(field_name.split('_'))),
+        populate_by_name=True
+    )
+
     status: str
     stream_id: Optional[str] = None
     rtsp_url: Optional[str] = None
@@ -474,11 +561,11 @@ def create_stream(req: StreamRequest):
     with stream_lock:
         for sp in stream_processors.values():
             if sp.source_url == source and sp.model_path == model_path:
-                return StreamResponse(
-                    status="success",
-                    stream_id=sp.stream_id,
-                    rtsp_url=sp.target_url,
-                    webrtc_url=sp.get_webrtc_url(),
+                return StreamResponse.model_construct(
+                    status="0",
+                    streamId=sp.stream_id,
+                    rtspUrl=sp.target_url,
+                    webrtcUrl=sp.get_webrtc_url(),
                     message="Stream already exists"
                 )
 
@@ -486,16 +573,16 @@ def create_stream(req: StreamRequest):
     processor = StreamProcessor(stream_id, source, duration, model_path, dev_id)
 
     if not processor.start():
-        return StreamResponse(status="error", message="Failed to connect to source stream or timeout")
+        return StreamResponse.model_construct(status="1", message="Failed to connect to source stream or timeout")
 
     with stream_lock:
         stream_processors[stream_id] = processor
 
-    return StreamResponse(
-        status="success",
-        stream_id=stream_id,
-        rtsp_url=processor.target_url,
-        webrtc_url=processor.get_webrtc_url()
+    return StreamResponse.model_construct(
+        status="0",
+        streamId=stream_id,
+        rtspUrl=processor.target_url,
+        webrtcUrl=processor.get_webrtc_url()
     )
 
 
@@ -506,7 +593,39 @@ def stop_stream(stream_id: str):
     if not processor:
         raise HTTPException(status_code=404, detail="Stream not found")
     processor.stop()
-    return StreamResponse(status="success", message=f"Stream {stream_id} stopped")
+    return StreamResponse.model_construct(status="0", message=f"Stream {stream_id} stopped")
+
+
+class StreamCheckRequest(BaseModel):
+    rtsp_url: str = Field(..., description="源 RTSP 流地址")
+
+
+@app.post("/streams/rtsp_url", response_model=StreamResponse)
+def delete_stream_by_url(req: StreamCheckRequest):
+    """通过 RTSP 流地址和模型路径停止对应的流"""
+    source = req.rtsp_url.strip()
+
+    with stream_lock:
+        target_processor = None
+        for sp in stream_processors.values():
+            if sp.source_url == source:
+                target_processor = sp
+                break
+
+    if not target_processor:
+        return StreamResponse.model_construct(
+            status="1",
+            message="Stream not found"
+        )
+
+    # 停止流处理器
+    target_processor.stop()
+
+    return StreamResponse.model_construct(
+        status="0",
+        streamId=target_processor.stream_id,
+        message=f"Stream stopped successfully"
+    )
 
 
 @app.get("/streams")

@@ -62,11 +62,12 @@ docker run -d --name mediamtx --network host bluenviron/mediamtx
 
 ### 3. 修改配置文件
 
-编辑 `config.yml`，将 `mediamtx.webrtc_base` 改为实际的 MediaMTX 地址：
+编辑 `config.yml`，将 `mediamtx.host` 和 `mediamtx.port` 改为实际rtsp推流的 MediaMTX 地址：
 
 ```yaml
 mediamtx:
-  webrtc_base: "http://你的IP:8889"
+  host: "你的IP"
+  port: 8554
 ```
 
 其他配置如端口、帧率、默认模型路径可按需调整。
@@ -111,10 +112,10 @@ curl -X POST "http://localhost:8000/detect" \
 {
   "rtsp_url": "rtsp://摄像头地址/路径",
   "duration": 1800,
-  "model_path": null
+  "model_path": null,
+  "device_id": 1
 }
 ```
-
 | 字段 | 类型          | 必填 | 说明                   |
 |------|-------------|----|----------------------|
 | rtsp_url | string      | 是  | 源 RTSP 流地址           |
@@ -129,11 +130,13 @@ curl -X POST "http://localhost:8000/detect" \
   "status": "success",
   "stream_id": "a1b2c3d4",
   "rtsp_url": "rtsp://.../原路径/yolo",
-  "webrtc_url": "http://IP:8889/原路径/yolo"
+  "webrtc_url": "原路径/yolo"
 }
 ```
 
-推流成功后，可在浏览器中打开 `webrtc_url` 观看实时检测画面。
+返回的 `webrtc_url`只有路径, 需要反向代理
+
+推流成功后，可在浏览器中打开 `mediamtx的IP:8889/原路径/yolo` 观看实时检测画面。
 
 ### 3. 查看所有流
 
@@ -151,26 +154,27 @@ curl -X POST "http://localhost:8000/detect" \
 
 所有业务参数均在 `config.yml` 中，核心项：
 
-| 配置项                         | 说明                     | 默认值                   |
-|-----------------------------|------------------------|-----------------------|
-| service.host                | 服务监听地址                 | 0.0.0.0               |
-| service.port                | 服务监听端口                 | 8000                  |
-| nacos.server_addr           | nacos服务地址              | http://127.0.0.1:8848 |
-| nacos.group                 | nacos注册中心的组            | DEFAULT_GROUP         |
-| nacos.service_name          | 注册的服务名                 | py-service            |
-| mediamtx.webrtc_base        | MediaMTX WebRTC 基础 URL | http://127.0.0.1:8889 |
-| yolo.default_model          | 默认 YOLO 模型路径           | ../yolo11n.pt         |
-| yolo.target_fps             | 推流帧率                   | 15                    |
-| yolo.stream_connect_timeout | 拉流超时(秒)                | 5                     |
-| rabbitmq.host               | RabbitMQ 服务器地址         | 127.0.0.1             |
-| rabbitmq.port               | RabbitMQ 端口              | 5672                  |
-| rabbitmq.virtual_host       | RabbitMQ 虚拟主机          | /                     |
-| rabbitmq.username           | RabbitMQ 用户名            | guest                 |
-| rabbitmq.password           | RabbitMQ 密码              | guest                 |
-| rabbitmq.exchange           | RabbitMQ 交换机名称         | yolo.direct.exchange  |
-| rabbitmq.routing_key        | RabbitMQ 路由键            | yolo.statistics       |
-| rabbitmq.stats_interval     | 统计发送间隔（秒）            | 30                    |
-| temp_img                    | 图片检测结果保存目录             | ./model_results       |
+| 配置项                         | 说明                  | 默认值                   |
+|-----------------------------|---------------------|-----------------------|
+| service.host                | 服务监听地址              | 0.0.0.0               |
+| service.port                | 服务监听端口              | 8000                  |
+| nacos.server_addr           | nacos服务地址           | http://127.0.0.1:8848 |
+| nacos.group                 | nacos注册中心的组         | DEFAULT_GROUP         |
+| nacos.service_name          | 注册的服务名              | py-service            |
+| mediamtx.host               | rtsp推流的 MediaMTX 地址 | 127.0.0.1             |
+| mediamtx.port               | rtsp推流的 MediaMTX 端口 | 8554                  |
+| yolo.default_model          | 默认 YOLO 模型路径        | ../yolo11n.pt         |
+| yolo.target_fps             | 推流帧率                | 15                    |
+| yolo.stream_connect_timeout | 拉流超时(秒)             | 5                     |
+| rabbitmq.host               | RabbitMQ 服务器地址      | 127.0.0.1             |
+| rabbitmq.port               | RabbitMQ 端口         | 5672                  |
+| rabbitmq.virtual_host       | RabbitMQ 虚拟主机       | /                     |
+| rabbitmq.username           | RabbitMQ 用户名        | guest                 |
+| rabbitmq.password           | RabbitMQ 密码         | guest                 |
+| rabbitmq.exchange           | RabbitMQ 交换机名称      | yolo.direct.exchange  |
+| rabbitmq.routing_key        | RabbitMQ 路由键        | yolo.statistics       |
+| rabbitmq.stats_interval     | 统计发送间隔（秒）           | 30                    |
+| temp_img                    | 图片检测结果保存目录          | ./model_results       |
 
 ## 注意事项
 

@@ -43,8 +43,12 @@ class Config:
         return self._config.get("nacos", {}).get("service_name", "py-service")
 
     @property
-    def mediamtx_webrtc_base(self) -> str:
-        return self._config.get("mediamtx", {}).get("webrtc_base", "http://127.0.0.1:8889")
+    def mediamtx_host(self) -> str:
+        return self._config.get("mediamtx", {}).get("host", "127.0.0.1")
+
+    @property
+    def mediamtx_rtsp_port(self) -> int:
+        return int(self._config.get("mediamtx", {}).get("rtsp_port", 8554))
 
     @property
     def default_model_path(self) -> str:
@@ -89,6 +93,14 @@ class Config:
     @property
     def rabbitmq_routing_key(self) -> str:
         return self._config.get("rabbitmq", {}).get("routing_key", "yolo.statistics")
+
+    @property
+    def rabbitmq_error_routing_key(self) -> str:
+        return self._config.get("rabbitmq", {}).get("error_routing_key", "yolo.error")
+
+    @property
+    def rabbitmq_end_routing_key(self) -> str:
+        return self._config.get("rabbitmq", {}).get("end_routing_key", "yolo.end")
 
     @property
     def rabbitmq_stats_interval(self) -> int:

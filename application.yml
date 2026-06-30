@@ -9,9 +9,10 @@ nacos:
   group: "DEFAULT_GROUP"
   service_name: "yolo-service"
 
-# MediaMTX WebRTC 基础地址
+# MediaMTX 基础地址
 mediamtx:
-  webrtc_base: "http://192.168.233.128:8889"
+  host: "192.168.233.128"
+  rtsp_port: 8554
 
 # YOLO 推理
 yolo:
@@ -28,6 +29,8 @@ rabbitmq:
   password: "123"
   exchange: "yolo.direct.exchange"   # 交换机名称
   routing_key: "yolo.statistics"     # 路由键
+  error_routing_key: "yolo.error"
+  end_routing_key: "yolo.end"
   stats_interval: 30                 # 统计发送间隔（秒）
 
 # 图片检测结果保存目录
